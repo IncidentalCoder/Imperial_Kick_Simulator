@@ -43,8 +43,9 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
         WarningEditField               matlab.ui.control.EditField
         ConnecttheArduinoButton        matlab.ui.control.Button
         UIAxes                         matlab.ui.control.UIAxes
-        TotalSamplingPeriodsEditFieldLabel  matlab.ui.control.Label
-        TotalSamplingPeriodsEditField  matlab.ui.control.NumericEditField
+        DataSamplingPeriodsEditFieldLabel  matlab.ui.control.Label
+        DataSamplingPeriodsEditField   matlab.ui.control.NumericEditField
+        RealtimePlottingCheckBox       matlab.ui.control.CheckBox
     end
 
     methods (Access = private)
@@ -61,8 +62,8 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
         % Button pushed function: StartKickingButton
         function StartKickingButtonPushed(app, event)
             % Decleration of the golbal variables
-            global a1 a2 act1 act2 gap_between_act_wall no_load_speed full_load_speed m_act1 m_act2 check_if_kicking_on check_if_arduino_connected ...
-                sensor1 sensor2 data_number
+            global a1 s act1 act2 gap_between_act_wall no_load_speed full_load_speed m_act1 m_act2 check_if_kicking_on check_if_arduino_connected ...
+                sensor1 sensor2 data_number sampling_frequency
             %
             try % In case some error is generated in this section, which can happen due to power or connection loss, the program execution goes to the catch statement
                 %
@@ -83,9 +84,6 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                 end
                 %
                 % If the arduino board is connected and no kicking is going on, the following commands will be executed
-                %
-                % Updating the status check variable for the kicking
-                check_if_kicking_on = 1; % It indicates some kicking i going on. This variable will be cleared at the end of kicking
                 %
                 %xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
                 %
@@ -119,23 +117,29 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                     return % This will end the executin of this function
                 end
                 %
+                % Updating the status check variable for the kicking
+                check_if_kicking_on = 1; % It indicates some kicking is going on. This variable will be cleared at the end of kicking
+                %
                 %~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Defining a timer for force data acquisition ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
                 %****************************************************************************************************************************************
                 %
                 ti = timer; % Define a timer object
-                ti.TimerFcn =@my_timer_func;
+                ti.TimerFcn =@my_timer_func; % timer function for data acquisition
                 ti.ExecutionMode = 'fixedRate';
-                ti.period = 0.1; % Setting a frequency of 25 Hz
+                ti.period = 1/sampling_frequency; % Setting a frequency of 20 Hz
                 data_number = 1; % initialing the variable to keep track of the data recording
                 %
+                % For realtime plotting
                 % Defining the settings for the real time plot
-                plot(app.UIAxes,0,0); % Refreshing the plot to remove the previous data                
-                h1 = animatedline (app.UIAxes, 'Color', 'b', 'DisplayName', 'Sensor1');                
-                h2 = animatedline (app.UIAxes, 'DisplayName', 'Sensor2');
+                plot(app.UIAxes,0,0); % Refreshing the plot to remove the previous data
+                h1 = animatedline (app.UIAxes, 'Color', 'b', 'DisplayName', 'Actuator1');
+                h2 = animatedline (app.UIAxes, 'Color', 'm', 'DisplayName', 'Actuator2');
                 legend ([h1 h2],'Location','southwest', 'Box','off');
                 %
-                tic
-                start(ti);
+                flushinput(s); % To flush the store data from the buffer of the serial communication
+                %
+                tic % Starting point of the time counting
+                start(ti); % Starting of the data acquisition system
                 %
                 % XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
                 %
@@ -143,6 +147,7 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                 %****************************************************************************************************************************************
                 %
                 app.StatusEditField.Value = 'Kicking is going on...';
+                app.StartKickingButton.Enable = 0; % Disabling the button
                 % ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Kick Mode = Single ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
                 %
                 if (app.KickModeDropDown.Value == '            Single')
@@ -201,43 +206,37 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                     %
                 elseif (app.KickModeDropDown.Value == 'Dual: Simulteneous')
                     %
-                    if (kick_count_act1 ~= kick_count_act2) % This condition has to be met for this mode
-                        app.WarningEditField.Value = 'Wrong input: In this mode, no. of kicks in actuator1 and actuator2 needs to be equal.';
-                        beep;
+                    if (app.StartwithActuatorDropDown.Value == '1')
+                        kick_count_act = kick_count_act1;
                     else
-                        while(kick_count_act1 > 0) % Since the no. of kicks in both actuators are same, any one of them can be used
-                            writePosition(act1,pos1);
-                            writePosition(act2,pos2);
+                        kick_count_act = kick_count_act2;
+                    end
+                    %
+                    while(kick_count_act > 0)
+                        writePosition(act1,pos1);
+                        writePosition(act2,pos2);
+                        %
+                        if (delay_time1 < delay_time2) % If the delay required for actuator1 is less than actuator2
+                            pause(delay_time1); % Pause for lower delay
+                            writePosition(act1,0); % Write the return position to actuator1
+                            pause(delay_time2 - delay_time1); % Pause for the rest of the delay
+                            writePosition(act2,0); % Write the return position to actuator2
+                            pause (delay_time2); % Pause for the higher delay, so that next cycle starts together
                             %
-                            if (delay_time1 < delay_time2) % If the delay required for actuator1 is less than actuator2
-                                pause(delay_time1); % Pause for lower delay
-                                writePosition(act1,0); % Write the return position to actuator1
-                                pause(delay_time2 - delay_time1); % Pause for the rest of the delay
-                                writePosition(act2,0); % Write the return position to actuator2
-                                pause (delay_time2); % Pause for the higher delay, so that next cycle starts together
-                                %
-                            else % delay_time1 > delay_time_2
-                                pause(delay_time2);
-                                writePosition(act2,0);
-                                pause(delay_time1 - delay_time2);
-                                writePosition(act1,0);
-                                pause (delay_time1);
-                            end
-                            %
-                            kick_count_act1 = kick_count_act1 - 1;
+                        else % delay_time1 > delay_time_2
+                            pause(delay_time2);
+                            writePosition(act2,0);
+                            pause(delay_time1 - delay_time2);
+                            writePosition(act1,0);
+                            pause (delay_time1);
                         end
                         %
-                        % Display the kick durations
-                        app.Actuator1sEditField.Value = 2 * (delay_time1 - gap_between_act_wall/no_load_speed) - app.PauseatthepicksEditField.Value;
-                        app.Actuator2sEditField.Value = 2 * (delay_time2 - gap_between_act_wall/no_load_speed) - app.PauseatthepicksEditField_2.Value;
-                        %
-                        % Warning for non-zero delay between kicks or actuators
-                        %                         if(app.DelayBetweenKickssEditField.Value ~= 0 || app.DelayBetweenKickssEditField_2.Value ~= 0)
-                        %                             app.WarningEditField.Value = '"Delay Between Kicks" is not used in this mode.';
-                        %                             beep;
-                        %                         end
-                        %
+                        kick_count_act = kick_count_act - 1;
                     end
+                    %
+                    % Display the kick durations
+                    app.Actuator1sEditField.Value = 2 * (delay_time1 - gap_between_act_wall/no_load_speed) - app.PauseatthepicksEditField.Value;
+                    app.Actuator2sEditField.Value = 2 * (delay_time2 - gap_between_act_wall/no_load_speed) - app.PauseatthepicksEditField_2.Value;
                     %
                     % XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
                     %
@@ -302,12 +301,6 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                     app.Actuator1sEditField.Value = 2 * (delay_time1 - gap_between_act_wall/no_load_speed) - app.PauseatthepicksEditField.Value;
                     app.Actuator2sEditField.Value = 2 * (delay_time2 - gap_between_act_wall/no_load_speed) - app.PauseatthepicksEditField_2.Value;
                     %
-                    % % Warning for non-zero delay between kicks or actuators
-                    %                     if(app.DelayBetweenKickssEditField.Value ~= 0 || app.DelayBetweenKickssEditField_2 ~=0)
-                    %                         app.WarningEditField.Value = '"Delay Between Kicks" is not used in this mode.';
-                    %                         beep;
-                    %                     end
-                    %
                     % XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
                     %
                     % ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Kick Mode = Dual: Random ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -358,7 +351,6 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                                         pause(app.DelayBetweenActuatorssEditField.Value - delay_time1); % Rest of the delay before starting the actuator2
                                         writePosition(act2,pos2); % Starting the actuator2
                                         %
-                                        %%%%%%%%%%%%%%%%%%% Rechek the below code
                                         if (delay_time1 <= (app.DelayBetweenActuatorssEditField.Value - delay_time1)) % Actuator1 has already returned to origin
                                             pause(delay_time2);
                                             writePosition(act2,0); % Actuator2 start returning
@@ -376,7 +368,7 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                                                 % after starting the return journey of actuator1
                                             end
                                         end
-                                        %%%%%%%%%%%%%%%%%%%%%%%%
+                                        %
                                     end
                                     %
                                 else % Actuator1 is not kicking
@@ -439,7 +431,6 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                                         pause(app.DelayBetweenActuatorssEditField.Value - delay_time2); % Rest of the delay before starting the actuator1
                                         writePosition(act1,pos1); % Starting the actuator1
                                         %
-                                        %%%%%%%%%%%%%%%%%%% Rechek the below code
                                         if (delay_time2 <= (app.DelayBetweenActuatorssEditField.Value - delay_time2)) % Actuator2 has already returned to origin
                                             pause(delay_time1);
                                             writePosition(act1,0); % Actuator1 start returning
@@ -485,18 +476,13 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                     app.Actuator1sEditField.Value = 2 * (delay_time1 - gap_between_act_wall/no_load_speed) - app.PauseatthepicksEditField.Value;
                     app.Actuator2sEditField.Value = 2 * (delay_time2 - gap_between_act_wall/no_load_speed) - app.PauseatthepicksEditField_2.Value;
                     %
-                    %                     %
-                    %                     if(app.DelayBetweenKickssEditField.Value ~= 0 || app.DelayBetweenKickssEditField_2.Value ~= 0)
-                    %                         app.WarningEditField.Value = '"Delay Between Kicks" is not used in this mode.';
-                    %                         beep;
-                    %                     end
-                    %
                 end
                 %
                 % XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
                 %
                 % Change of status at the end of kicking
                 app.StatusEditField.Value = 'Kicking has finished.';
+                app.StartKickingButton.Enable = 1; % Enabling the button
                 beep;
                 %
                 % Updating the status check variable for the kicking
@@ -506,31 +492,57 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                 %
                 stop (ti);
                 Total_Sampling_period = toc;
-                app.TotalSamplingPeriodsEditField.Value = Total_Sampling_period; % Upadting the total sampling period field
+                app.DataSamplingPeriodsEditField.Value = Total_Sampling_period; % Upadting the total sampling period field
                 %
+                %                 pause (2);
                 % Plotting the force vs time graph
-                %                 timeAxis1 = (linspace(0,Total_Sampling_period,length(sensor1)))';
-                %                 timeAxis2 = (linspace(0,Total_Sampling_period,length(sensor2)))';
-                %                 plot(app.UIAxes,timeAxis1,sensor1,timeAxis2,sensor2);
+                timeAxis1 = (linspace(0,Total_Sampling_period,length(sensor1)))'; % length(sensor1) gives the no. of element
+                timeAxis2 = (linspace(0,Total_Sampling_period,length(sensor2)))';
+                plot(app.UIAxes,timeAxis1,sensor1(:,1),'b',timeAxis2,sensor2(:,1),'m');
+                legend(app.UIAxes,{'Actuator1','Actuator2'});
                 %
+                % Saving the sensor data
+                sensor_data = [sensor1 timeAxis1 sensor2 timeAxis2];
+                
+                try
+                    file_list = ls('Sensor_Data');                    
+                    file_Name = file_list (end, end-6:end-4);
+                catch
+                    fopen('Sensor_Data\SensorData_000.txt','w');
+                    fclose('all');
+                    file_list = ls('Sensor_Data');
+                    file_Name = file_list (end, end-6:end-4);
+                end
+                file_Name = str2double(file_Name)+1;
+                file_Name = sprintf('SensorData_%03d.txt', file_Name);
+                file_Name = strcat('C:\Users\akg18\Box Sync\My Documents\Academic- PhD_Imperial\Research Work\My Work\Test_Bed\Codes\Kick_Simulator\Sensor_Data\',file_Name);
+                save (file_Name,'sensor_data', '-ascii');
                 %
             catch
                 app.StatusEditField.Value = 'Connection is lost. Try to reconnect';
                 app.WarningEditField.Value = '';
+                app.StartKickingButton.Enable = 1; % Enabling the button
                 %
-                clear all;
+                % clear all;
             end
             %
             function my_timer_func(~,~)
                 %
                 % Reading the analog voltages from the arduino pins
-                sensor1(data_number)= readVoltage(a2,'A1');
-                sensor2(data_number) = readVoltage(a2,'A2');
+                %                 sensor1(data_number)= readVoltage(a2,'A1');
+                %                 sensor2(data_number) = readVoltage(a2,'A2');
+                r = fgets(s);
+                rn = str2num(r);
+                sensor1 (data_number,1)= rn(1);
+                sensor2 (data_number,1)= rn(2);
                 %
                 % Real-time Plotting
-                addpoints(h1,toc,sensor1(data_number));
-                addpoints(h2,toc,sensor2(data_number));
-                drawnow;
+                if (app.RealtimePlottingCheckBox.Value == 1)
+                    addpoints(h1,toc,sensor1(data_number,1));
+                    addpoints(h2,toc,sensor2(data_number,1));
+                    drawnow limitrate;
+                    %
+                end
                 %
                 data_number = data_number+1;
             end
@@ -550,7 +562,8 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
             pause(1); % So that you can see the above message
             %
             % Decleration of the golbal variables
-            global a1 a2 act1 act2 gap_between_act_wall no_load_speed full_load_speed m_act1 m_act2 check_if_kicking_on check_if_arduino_connected
+            global a1 s act1 act2 gap_between_act_wall no_load_speed full_load_speed m_act1 m_act2 check_if_kicking_on check_if_arduino_connected ...
+                sampling_frequency
             %
             % Difining the constants
             gap_between_act_wall = 9; % mm
@@ -558,15 +571,30 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
             full_load_speed = 7.24; % mm/s
             m_act1 = 45.475; % Tangent of the displacement vs position variable curve for actutor 1
             m_act2 = 47.091; % Tangent of the displacement vs position variable curve for actutor 1
+            sampling_frequency = 20; % Hz
             %
             % Declaring some checking variables
             check_if_kicking_on = 0;
             check_if_arduino_connected = 0;
             %
+            try
+                % Clearing up previous serial connections
+                if ~isempty(instrfind)
+                    fclose(instrfind);
+                    delete(instrfind);
+                end
+                %
+                s = serial('COM4','BaudRate',115200); % For serial communication
+                fopen(s); % Opening the serial port
+                fgets(s); % Frist data is not used
+            catch
+                app.StatusEditField.Value = 'The serial port is not connected.';
+                return
+            end
             % Setting up the connection
             try
-                a1 = arduino('COM10','Mega2560'); % Creat an arduino object.
-                a2 = arduino('COM4','UNO');
+                a1 = arduino('COM10','Mega2560'); % Create an arduino object.
+                %                 a2 = arduino('COM4','UNO'); % Needed when data will be directly read from the pin, not through the serial port
                 % In case of an already existing connection or no connection, the program will go to catch
                 %
                 % Connect to the actuators in digital pin 9 and 10. Specs for max and min pulse duration
@@ -585,15 +613,13 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
                 app.StatusEditField.Value = 'Arduino board is connected successfully.';
                 %
             catch % In case of error occures while setting up the connection, the following commands will be executed
-                try
-                    % Check if the connection is already there
-                    isvalid(a1); % Gives error message if a1 is not a arduino object => Program execution goes to catch.
-                    isvalid(a2);
-                    % In case the above statement generates no error message, arduino connection already exists.
+                slist = seriallist;
+                prt = 'COM10';
+                if (intersect (prt, slist) == 'COM10')
                     app.StatusEditField.Value = 'Connection already exists.';
                     check_if_arduino_connected = 1; % Updating the arduino connection checking variable
-                catch
-                    app.StatusEditField.Value = 'Connections are not found. Check the USB cable and try again.';
+                else
+                    app.StatusEditField.Value = 'Arduino Connection is not found. Check the USB cable and try again.';
                     clear all; % This line does not clear the base workspace
                     evalin('base','clear all'); % to clear the variables in the base workspace
                     return
@@ -607,38 +633,123 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
 
         % Value changed function: KickModeDropDown
         function KickModeDropDownValueChanged(app, event)
-            if (app.KickModeDropDown.Value == '      Dual: Random')
+            Kick_mode_value = app.KickModeDropDown.Value;
+            %
+            if (Kick_mode_value == '      Dual: Random')
                 %
-                app.DelayBetweenActuatorssEditField.Editable = 1; % "Delay between actuator" is available in this mode
+                app.DelayBetweenActuatorssEditField.Editable = 1;
                 app.DelayBetweenActuatorssEditField.Value = 0; % Initializes the value
                 %
-                app.DelayBetweenKickssEditField.Editable = 0; % "Delay between kicks" is not available in this mode
+                % Fields for Actuator 1
+                app.NoofKicksEditField_2.Editable = 1;
+                app.WallDisplacementmmEditField.Editable = 1;
+                app.PauseatthepicksEditField.Editable = 1;
+                app.DelayBetweenKickssEditField.Editable = 0; % "Delay Between Kicks" is not available in this mode
                 app.DelayBetweenKickssEditField.Value = 0; % Changed back to default value
-                app.DelayBetweenKickssEditField_2.Editable = 0;
+                %
+                % Fields for Actuator 2
+                app.NoofKicksEditField_3.Editable = 1;
+                app.WallDisplacementmmEditField_2.Editable = 1;
+                app.PauseatthepicksEditField_2.Editable = 1;
+                app.DelayBetweenKickssEditField_2.Editable = 0; % "Delay Between Kicks" is not available in this mode
                 app.DelayBetweenKickssEditField_2.Value = 0;
                 %
-            elseif ((app.KickModeDropDown.Value == '            Single'))
+                app.WarningEditField.Value = '"Delay Between Kicks" is not available in this mode.';
+                %
+            elseif (Kick_mode_value == '            Single')
                 %
                 app.DelayBetweenActuatorssEditField.Editable = 0; % "Delay between actuators" is not available in this mode
                 app.DelayBetweenActuatorssEditField.Value = 0; % Changed back to default value
                 %
-                app.DelayBetweenKickssEditField.Editable = 1; % "Delay between kicks" is available in this mode
-                app.DelayBetweenKickssEditField.Value = 0; % Initializes the value
+                % Fields for Actuator 1
+                app.NoofKicksEditField_2.Editable = 1;
+                app.WallDisplacementmmEditField.Editable = 1;
+                app.PauseatthepicksEditField.Editable = 1;
+                app.DelayBetweenKickssEditField.Editable = 1; % "Delay Between Kicks" is available in this mode
+                %
+                % Fields for Actuator 2
+                app.NoofKicksEditField_3.Editable = 1;
+                app.WallDisplacementmmEditField_2.Editable = 1;
+                app.PauseatthepicksEditField_2.Editable = 1;
                 app.DelayBetweenKickssEditField_2.Editable = 1;
-                app.DelayBetweenKickssEditField_2.Value = 0; % Initializes the value
-                
+                %
+                app.WarningEditField.Value = '"Delay Between Actuators" is not available in this mode.';
                 %
             else % In 'Dual: Simulteneous' and 'Dual: Consequitive' mode
                 app.DelayBetweenActuatorssEditField.Editable = 0; % "Delay between actuators" is not available in this mode
                 app.DelayBetweenActuatorssEditField.Value = 0; % Changed back to default value
                 %
-                app.DelayBetweenKickssEditField.Editable = 0; % "Delay between kicks" is not available in this mode
-                app.DelayBetweenKickssEditField.Value = 0;
-                app.DelayBetweenKickssEditField_2.Editable = 0;
-                app.DelayBetweenKickssEditField_2.Value = 0;
+                % Fields for Actuator 1
+                app.NoofKicksEditField_2.Editable = 1;
+                app.WallDisplacementmmEditField.Editable = 1;
+                app.PauseatthepicksEditField.Editable = 1;
+                app.DelayBetweenKickssEditField.Editable = 0; % "Delay Between Kicks" is not available in this mode
+                app.DelayBetweenKickssEditField.Value = 0; % Changed back to default value
+                %
+                % Fields for Actuator 2
+                app.NoofKicksEditField_3.Editable = 1;
+                app.WallDisplacementmmEditField_2.Editable = 1;
+                app.PauseatthepicksEditField_2.Editable = 1;
+                app.DelayBetweenKickssEditField_2.Editable = 0; % "Delay Between Kicks" is not available in this mode
+                app.DelayBetweenKickssEditField_2.Value = 0; % Changed back to default value
+                %
+                if ((Kick_mode_value == 'Dual: Simulteneous') & (app.StartwithActuatorDropDown.Value == '1')) % Additional condition in case the mode is 'Dual: Simulteneous'
+                    app.NoofKicksEditField_3.Editable = 0; % No. of kicks will be taken from the Actuator1
+                    app.NoofKicksEditField_3.Value = 0;
+                    %
+                elseif ((Kick_mode_value == 'Dual: Simulteneous') & (app.StartwithActuatorDropDown.Value == '1'))
+                    app.NoofKicksEditField_2.Editable = 0; % No. of kicks will be taken from the Actuator2
+                    app.NoofKicksEditField_2.Value = 0;
+                end
+                %
+                app.WarningEditField.Value = '"Delay Between Actuators" & "Delay Between Kicks" are not available in this mode';
                 %
             end
             %
+        end
+
+        % Value changed function: StartwithActuatorDropDown
+        function StartwithActuatorDropDownValueChanged(app, event)
+            start_with_actuator_value = app.StartwithActuatorDropDown.Value;
+            %
+            if ((start_with_actuator_value == '1') & (app.KickModeDropDown.Value == '            Single'))
+                % Turn on the Actuator 1
+                app.NoofKicksEditField_2.Editable = 1;
+                app.WallDisplacementmmEditField.Editable = 1;
+                app.PauseatthepicksEditField.Editable = 1;
+                app.DelayBetweenKickssEditField.Editable = 1;
+                %
+                % Turn off the Actuator 2
+                app.NoofKicksEditField_3.Editable = 0;
+                app.NoofKicksEditField_3.Value = 0; % Resetting the No. of Kicks to 0 so that Actuator 2 is disabled
+                app.WallDisplacementmmEditField_2.Editable = 0;
+                app.PauseatthepicksEditField_2.Editable = 0;
+                app.DelayBetweenKickssEditField_2.Editable = 0;
+                %
+            elseif ((start_with_actuator_value == '2') & (app.KickModeDropDown.Value == '            Single'))
+                % Turn off the Actuator 1
+                app.NoofKicksEditField_2.Editable = 0;
+                app.NoofKicksEditField_2.Value = 0; % Resetting the No. of Kicks to 0 so that Actuator 1 is disabled
+                app.WallDisplacementmmEditField.Editable = 0;
+                app.PauseatthepicksEditField.Editable = 0;
+                app.DelayBetweenKickssEditField.Editable = 0;
+                %
+                % Turn on the Actuator 2
+                app.NoofKicksEditField_3.Editable = 1;
+                app.WallDisplacementmmEditField_2.Editable = 1;
+                app.PauseatthepicksEditField_2.Editable = 1;
+                app.DelayBetweenKickssEditField_2.Editable = 1;
+                %
+            elseif ((start_with_actuator_value == '1') & (app.KickModeDropDown.Value == 'Dual: Simulteneous'))
+                app.NoofKicksEditField_2.Editable = 1; % No. of kick in Actuator1 becomes editable
+                app.NoofKicksEditField_3.Editable = 0;
+                app.NoofKicksEditField_3.Value = 0;
+                %
+            elseif ((start_with_actuator_value == '2') & (app.KickModeDropDown.Value == 'Dual: Simulteneous'))
+                app.NoofKicksEditField_2.Editable = 0;
+                app.NoofKicksEditField_2.Value = 0;
+                app.NoofKicksEditField_3.Editable = 1; % No. of kick in Actuator2 becomes editable
+            end
         end
     end
 
@@ -687,13 +798,13 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
             % Create Actuator1sEditFieldLabel
             app.Actuator1sEditFieldLabel = uilabel(app.UIFigure);
             app.Actuator1sEditFieldLabel.HorizontalAlignment = 'center';
-            app.Actuator1sEditFieldLabel.Position = [97 145 78 22];
+            app.Actuator1sEditFieldLabel.Position = [97 141 78 22];
             app.Actuator1sEditFieldLabel.Text = 'Actuator 1 (s)';
 
             % Create Actuator1sEditField
             app.Actuator1sEditField = uieditfield(app.UIFigure, 'numeric');
             app.Actuator1sEditField.Editable = 'off';
-            app.Actuator1sEditField.Position = [188 145 46 22];
+            app.Actuator1sEditField.Position = [188 141 46 22];
 
             % Create PauseatthepicksLabel
             app.PauseatthepicksLabel = uilabel(app.UIFigure);
@@ -713,18 +824,19 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
 
             % Create WallDisplacementmmEditField_2
             app.WallDisplacementmmEditField_2 = uieditfield(app.UIFigure, 'numeric');
+            app.WallDisplacementmmEditField_2.Editable = 'off';
             app.WallDisplacementmmEditField_2.Position = [198 278 36 22];
 
             % Create Actuator2sEditFieldLabel
             app.Actuator2sEditFieldLabel = uilabel(app.UIFigure);
             app.Actuator2sEditFieldLabel.HorizontalAlignment = 'center';
-            app.Actuator2sEditFieldLabel.Position = [97 124 78 22];
+            app.Actuator2sEditFieldLabel.Position = [97 120 78 22];
             app.Actuator2sEditFieldLabel.Text = 'Actuator 2 (s)';
 
             % Create Actuator2sEditField
             app.Actuator2sEditField = uieditfield(app.UIFigure, 'numeric');
             app.Actuator2sEditField.Editable = 'off';
-            app.Actuator2sEditField.Position = [188 124 46 22];
+            app.Actuator2sEditField.Position = [188 120 46 22];
 
             % Create PauseatthepicksLabel_2
             app.PauseatthepicksLabel_2 = uilabel(app.UIFigure);
@@ -734,6 +846,7 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
 
             % Create PauseatthepicksEditField_2
             app.PauseatthepicksEditField_2 = uieditfield(app.UIFigure, 'numeric');
+            app.PauseatthepicksEditField_2.Editable = 'off';
             app.PauseatthepicksEditField_2.Position = [198 252 36 22];
 
             % Create StartwithActuatorLabel
@@ -745,6 +858,7 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
             % Create StartwithActuatorDropDown
             app.StartwithActuatorDropDown = uidropdown(app.UIFigure);
             app.StartwithActuatorDropDown.Items = {'1', '2'};
+            app.StartwithActuatorDropDown.ValueChangedFcn = createCallbackFcn(app, @StartwithActuatorDropDownValueChanged, true);
             app.StartwithActuatorDropDown.Position = [198 527 36 22];
             app.StartwithActuatorDropDown.Value = '1';
 
@@ -766,6 +880,7 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
 
             % Create NoofKicksEditField_3
             app.NoofKicksEditField_3 = uieditfield(app.UIFigure, 'numeric');
+            app.NoofKicksEditField_3.Editable = 'off';
             app.NoofKicksEditField_3.Position = [198 304 36 22];
 
             % Create DelayBetweenKickssLabel
@@ -829,12 +944,13 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
 
             % Create DelayBetweenKickssEditField_2
             app.DelayBetweenKickssEditField_2 = uieditfield(app.UIFigure, 'numeric');
+            app.DelayBetweenKickssEditField_2.Editable = 'off';
             app.DelayBetweenKickssEditField_2.Position = [198 227 36 22];
 
             % Create KickDurationLabel
             app.KickDurationLabel = uilabel(app.UIFigure);
             app.KickDurationLabel.FontWeight = 'bold';
-            app.KickDurationLabel.Position = [45 166 84 22];
+            app.KickDurationLabel.Position = [35 162 84 22];
             app.KickDurationLabel.Text = 'Kick Duration';
 
             % Create StatusEditFieldLabel
@@ -848,7 +964,7 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
             app.StatusEditField.Editable = 'off';
             app.StatusEditField.FontWeight = 'bold';
             app.StatusEditField.FontColor = [1 0 0];
-            app.StatusEditField.Position = [125 50 473 25];
+            app.StatusEditField.Position = [125 50 547 25];
 
             % Create KickModeDropDownLabel
             app.KickModeDropDownLabel = uilabel(app.UIFigure);
@@ -874,7 +990,7 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
             app.WarningEditField.Editable = 'off';
             app.WarningEditField.FontWeight = 'bold';
             app.WarningEditField.FontColor = [1 0 0];
-            app.WarningEditField.Position = [125 21 473 25];
+            app.WarningEditField.Position = [125 21 547 25];
 
             % Create ConnecttheArduinoButton
             app.ConnecttheArduinoButton = uibutton(app.UIFigure, 'push');
@@ -893,16 +1009,21 @@ classdef Kick_Simulator_exported < matlab.apps.AppBase
             app.UIAxes.YGrid = 'on';
             app.UIAxes.Position = [271 178 410 283];
 
-            % Create TotalSamplingPeriodsEditFieldLabel
-            app.TotalSamplingPeriodsEditFieldLabel = uilabel(app.UIFigure);
-            app.TotalSamplingPeriodsEditFieldLabel.HorizontalAlignment = 'center';
-            app.TotalSamplingPeriodsEditFieldLabel.Position = [45 89 140 22];
-            app.TotalSamplingPeriodsEditFieldLabel.Text = 'Total Sampling Period (s)';
+            % Create DataSamplingPeriodsEditFieldLabel
+            app.DataSamplingPeriodsEditFieldLabel = uilabel(app.UIFigure);
+            app.DataSamplingPeriodsEditFieldLabel.FontWeight = 'bold';
+            app.DataSamplingPeriodsEditFieldLabel.Position = [35 89 148 22];
+            app.DataSamplingPeriodsEditFieldLabel.Text = 'Data Sampling Period (s)';
 
-            % Create TotalSamplingPeriodsEditField
-            app.TotalSamplingPeriodsEditField = uieditfield(app.UIFigure, 'numeric');
-            app.TotalSamplingPeriodsEditField.Editable = 'off';
-            app.TotalSamplingPeriodsEditField.Position = [188 88 46 22];
+            % Create DataSamplingPeriodsEditField
+            app.DataSamplingPeriodsEditField = uieditfield(app.UIFigure, 'numeric');
+            app.DataSamplingPeriodsEditField.Editable = 'off';
+            app.DataSamplingPeriodsEditField.Position = [188 88 46 22];
+
+            % Create RealtimePlottingCheckBox
+            app.RealtimePlottingCheckBox = uicheckbox(app.UIFigure);
+            app.RealtimePlottingCheckBox.Text = 'Realtime Plotting';
+            app.RealtimePlottingCheckBox.Position = [343 407 113 22];
         end
     end
 
