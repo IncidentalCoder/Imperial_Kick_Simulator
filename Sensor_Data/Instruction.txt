@@ -1,0 +1,7 @@
+Column1: time (s)
+Column2: Force sensor 1 (in Newton, but offset error due to initial compression is not removed)
+Column3: Force sensor 2 (in Newton, but offset error due to initial compression is not removed)
+Column4: Acoustic sensor (V)
+Column5: Piezoelectric diaphragm (V)
+Column6-8: Accelerometer (V)
+ 
